@@ -22,10 +22,7 @@ isotropy:
 from math import sqrt, acos
 import numpy as np
 from scipy.special import legendre
-from rat import ROOT, dsreader
 from pmtpos import pmtpos
-
-ROOT.gROOT.SetBatch(True)
 
 debug = False
 
@@ -46,9 +43,7 @@ def get_theta(A, B, C):
 def calculate_betas(ev):
     fit_position = np.array(ev.GetFitResult('scintFitter').GetVertex(0).GetPosition())
     hit_pmts = [ev.GetPMTUnCal(i) for i in range(ev.GetPMTUnCalCount())]
-
     npairs = len(hit_pmts) * (len(hit_pmts) - 1) / 2
-    triangles = np.empty(shape=(npairs,3,3), dtype=np.float32)
 
     count = 0
     thetas = []
