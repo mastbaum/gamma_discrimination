@@ -1,0 +1,23 @@
+/glg4debug/glg4param omit_muon_processes  1.0
+/glg4debug/glg4param omit_hadronic_processes  1.0
+
+/run/initialize
+/rat/proc frontend
+/rat/proc trigger
+/rat/proc eventbuilder
+/rat/proc calibratePMT
+/rat/proc scintFitter
+/rat/proc count
+/rat/procset update 5
+/rat/proclast outroot
+/rat/procset file "e_%jobnum%.root"
+
+/generator/add combo gun:point:poisson
+
+/generator/vtx/set e- 0 0 0 3.5
+/generator/pos/set 0 0 0
+
+/generator/rate/set 1
+
+/run/beamOn 1000
+
