@@ -25,54 +25,89 @@
 #include <cuda.h>
 #include <stdio.h>
 
-__global__ void VecAdd(float* a, float* b, float* c) {
-    int i = threadIdx.x;
-    c[i] = a[i] + b[i];
+__global__ void get_coeffs(int2* pairs, float3* hit_pos, float3* fit_pos, float* p1, float* p4, int n) {
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+
+    if (i < n) {
+        int2 pair = pairs[i];
+
+        float3 A = hit_pos[pair.x];
+        float3 B = hit_pos[pair.y];
+        float3 C = *fit_pos;
+
+        float c = sqrtf((A.x-B.x)*(A.x-B.x) + (A.y-B.y)*(A.y-B.y) + (A.z-B.z)*(A.z-B.z));
+        float a = sqrtf((C.x-B.x)*(C.x-B.x) + (C.y-B.y)*(C.y-B.y) + (C.z-B.z)*(C.z-B.z));
+        float b = sqrtf((C.x-A.x)*(C.x-A.x) + (C.y-A.y)*(C.y-A.y) + (C.z-A.z)*(C.z-A.z));
+
+        // dust off that trig!
+        p1[i] = (float)(-0.5) * (c*c - a*a - b*b) / (a*b);
+
+        // Legendre P4(x) = (1/8) (25x**4 - 30x**2 + 3)
+        p4[i] = (float)(0.125) * (25*p1[i]*p1[i]*p1[i]*p1[i] - 30*p1[i]*p1[i] + 3);
+    }
 }
 
-extern "C" std::map<std::string, float> calculate_betas() {
-    std::map<std::string, float> betas;
-    betas["foo"] = 42.0;
-    return betas;
-}
-
-extern "C" int stuff(int argc, char* argv[]) {
-    const int N = 4;
-    const size_t size = N * sizeof(float);
-
-    float* a = (float*) malloc(size);
-    float* b = (float*) malloc(N * sizeof(float));
-    float* c = (float*) malloc(N * sizeof(float));
-
-    float *ad, *bd, *cd;
-    cudaMalloc((void**) &ad, size);
-    cudaMalloc((void**) &bd, size);
-    cudaMalloc((void**) &cd, size);
-
-   for (int i=0; i<N; i++) {
-        a[i] = i;
-        b[i] = 2 * i;
-        printf("%u %f %f\n", i, a[i], b[i]);
+float get_beta14(float3 &fit_pos, float3* hit_pos, int nhits) {
+    // compute list of pmt pairs (this isn't really necessary)
+    const int npairs = nhits * (nhits - 1) / 2;
+    int2* pairs = (int2*) malloc(npairs * sizeof(int2));
+    unsigned pidx = 0;
+    for (unsigned i=0; i<nhits-1; i++) {
+        for (unsigned j=i+1; j<nhits; j++) {
+            pairs[pidx] = make_int2(i, j);
+            pidx++;
+        }
     }
 
-    cudaMemcpy(ad, a, size, cudaMemcpyHostToDevice);
-    cudaMemcpy(bd, b, size, cudaMemcpyHostToDevice);
+    // allocate device memory and copy over
+    int2* pairs_device;
+    float* p1_device;
+    float* p4_device;
+    float3* hit_pos_device;
+    float3* fit_pos_device;
 
-    VecAdd<<<1,N>>>(ad, bd, cd);
+    cudaMalloc(&pairs_device, npairs * sizeof(int2));
+    cudaMalloc(&p1_device, npairs * sizeof(float));
+    cudaMalloc(&p4_device, npairs * sizeof(float));
+    cudaMalloc(&hit_pos_device, nhits * sizeof(float3));
+    cudaMalloc(&fit_pos_device, sizeof(float3));
 
-    cudaMemcpy(c, cd, size, cudaMemcpyDeviceToHost);
+    cudaMemcpy(pairs_device, pairs, npairs * sizeof(int2), cudaMemcpyHostToDevice);
+    cudaMemcpy(hit_pos_device, hit_pos, nhits * sizeof(float3), cudaMemcpyHostToDevice);
+    cudaMemcpy(fit_pos_device, &fit_pos, sizeof(float3), cudaMemcpyHostToDevice);
 
-    for (unsigned i=0; i<N; i++) {
-        printf("%u %f\n", i, c[i]);
+    // execute kernel and retreive results
+    int blocksize = 512;
+    int nblocks = npairs / blocksize + 1;
+    get_coeffs<<<nblocks, blocksize>>>(pairs_device, hit_pos_device, fit_pos_device, p1_device, p4_device, npairs);
+
+    float* p1 = (float*) malloc(npairs * sizeof(float));
+    float* p4 = (float*) malloc(npairs * sizeof(float));
+    cudaMemcpy(p1, p1_device, npairs * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(p4, p4_device, npairs * sizeof(float), cudaMemcpyDeviceToHost);
+
+    // compute average
+    float p1ave = 0.0;
+    float p4ave = 0.0;
+    for (unsigned i=0; i<npairs; i++) {
+        p1ave += p1[i];
+        p4ave += p4[i];
     }
 
-    free(a);
-    free(b);
-    free(c);
-    cudaFree(ad);
-    cudaFree(bd);
-    cudaFree(cd);
+    p1ave /= npairs;
+    p4ave /= npairs;
 
-    return 0;
+    float beta14 = p1ave + 4.0 * p4ave;
+
+    free(pairs);
+    free(p1);
+    free(p4);
+    cudaFree(pairs_device);
+    cudaFree(hit_pos_device);
+    cudaFree(fit_pos_device);
+    cudaFree(p1_device);
+    cudaFree(p4_device);
+
+    return beta14;
 }
 
